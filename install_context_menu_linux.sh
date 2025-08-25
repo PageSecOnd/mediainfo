@@ -6,6 +6,9 @@ echo "Installing MediaInfo Viewer for Linux..."
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Create local applications directory if it doesn't exist
+mkdir -p ~/.local/share/applications
+
 # Create desktop entry
 cat > ~/.local/share/applications/mediainfo-viewer.desktop << EOF
 [Desktop Entry]
