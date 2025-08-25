@@ -7,7 +7,7 @@ A beautiful and intuitive media file information viewer with modern UI
 import os
 import sys
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 import customtkinter as ctk
 from pymediainfo import MediaInfo
 from PIL import Image, ImageTk
@@ -15,6 +15,7 @@ import threading
 import json
 from pathlib import Path
 import darkdetect
+from translations import get_ui_text, get_attribute_name, get_category_name, get_available_languages
 
 # Set appearance mode
 ctk.set_appearance_mode("system")  # Modes: "System" (standard), "Dark", "Light"
@@ -23,9 +24,10 @@ ctk.set_default_color_theme("blue")  # Themes: "blue" (standard), "green", "dark
 class MediaInfoViewer:
     def __init__(self):
         self.root = ctk.CTk()
-        self.root.title("MediaInfo Viewer")
-        self.root.geometry("1000x700")
-        self.root.minsize(800, 600)
+        self.current_language = 'en'  # Default language
+        self.root.title(get_ui_text('title', self.current_language))
+        self.root.geometry("1200x800")  # Increased size for better layout
+        self.root.minsize(1000, 700)
         
         # Set window icon
         try:
@@ -36,6 +38,8 @@ class MediaInfoViewer:
             
         self.setup_ui()
         self.media_info = None
+        self.search_var = tk.StringVar()
+        self.search_var.trace('w', self.on_search_change)
         
         # Check if file was passed as argument
         if len(sys.argv) > 1:
@@ -55,7 +59,7 @@ class MediaInfoViewer:
         # Open file button
         self.open_button = ctk.CTkButton(
             self.top_frame, 
-            text="📁 Open Media File",
+            text=get_ui_text('open_file', self.current_language),
             command=self.open_file,
             height=40,
             font=ctk.CTkFont(size=14, weight="bold")
@@ -65,15 +69,33 @@ class MediaInfoViewer:
         # File path label
         self.file_path_label = ctk.CTkLabel(
             self.top_frame, 
-            text="No file selected", 
+            text=get_ui_text('no_file_selected', self.current_language), 
             font=ctk.CTkFont(size=12)
         )
         self.file_path_label.pack(side="left", padx=10, pady=10, fill="x", expand=True)
         
+        # Language selector
+        self.language_label = ctk.CTkLabel(
+            self.top_frame,
+            text=get_ui_text('language', self.current_language) + ":",
+            font=ctk.CTkFont(size=12)
+        )
+        self.language_label.pack(side="right", padx=(10, 5), pady=10)
+        
+        self.language_combo = ctk.CTkComboBox(
+            self.top_frame,
+            values=["English", "中文"],
+            command=self.change_language,
+            width=100,
+            height=35
+        )
+        self.language_combo.set("English")
+        self.language_combo.pack(side="right", padx=5, pady=10)
+        
         # Export button
         self.export_button = ctk.CTkButton(
             self.top_frame,
-            text="💾 Export Info",
+            text=get_ui_text('export_info', self.current_language),
             command=self.export_info,
             height=40,
             font=ctk.CTkFont(size=14, weight="bold"),
@@ -90,20 +112,20 @@ class MediaInfoViewer:
         
         self.status_label = ctk.CTkLabel(
             self.status_frame, 
-            text="Ready", 
+            text=get_ui_text('ready', self.current_language), 
             font=ctk.CTkFont(size=11)
         )
         self.status_label.pack(side="left", padx=10, pady=5)
     
     def setup_main_content(self):
         # Left sidebar for track selection
-        self.sidebar = ctk.CTkFrame(self.root, width=200)
+        self.sidebar = ctk.CTkFrame(self.root, width=250)  # Wider sidebar
         self.sidebar.grid(row=1, column=0, sticky="nsew", padx=(10, 5), pady=5)
         self.sidebar.grid_propagate(False)
         
         self.sidebar_label = ctk.CTkLabel(
             self.sidebar, 
-            text="📋 Tracks", 
+            text=get_ui_text('tracks', self.current_language), 
             font=ctk.CTkFont(size=16, weight="bold")
         )
         self.sidebar_label.pack(pady=10)
@@ -116,50 +138,199 @@ class MediaInfoViewer:
         self.content_frame = ctk.CTkFrame(self.root)
         self.content_frame.grid(row=1, column=1, sticky="nsew", padx=(5, 10), pady=5)
         self.content_frame.grid_columnconfigure(0, weight=1)
-        self.content_frame.grid_rowconfigure(1, weight=1)
+        self.content_frame.grid_rowconfigure(2, weight=1)
         
         # Content title
         self.content_title = ctk.CTkLabel(
             self.content_frame, 
-            text="📄 Media Information", 
+            text=get_ui_text('media_information', self.current_language), 
             font=ctk.CTkFont(size=18, weight="bold")
         )
         self.content_title.grid(row=0, column=0, pady=10, sticky="w", padx=20)
         
-        # Scrollable text area for media info
-        self.info_textbox = ctk.CTkTextbox(
-            self.content_frame,
-            font=ctk.CTkFont(family="Consolas", size=12),
-            wrap="word"
+        # Search frame
+        self.search_frame = ctk.CTkFrame(self.content_frame)
+        self.search_frame.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 10))
+        self.search_frame.grid_columnconfigure(0, weight=1)
+        
+        # Search entry
+        self.search_entry = ctk.CTkEntry(
+            self.search_frame,
+            placeholder_text=get_ui_text('search_placeholder', self.current_language),
+            textvariable=self.search_var,
+            height=35,
+            font=ctk.CTkFont(size=12)
         )
-        self.info_textbox.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 20))
+        self.search_entry.pack(fill="x", padx=10, pady=10)
+        
+        # Create main info display using Treeview for structured data
+        self.setup_treeview()
         
         # Default message
         self.show_welcome_message()
     
+    def setup_treeview(self):
+        """Setup the structured treeview for displaying media information"""
+        # Create frame for treeview
+        self.tree_frame = ctk.CTkFrame(self.content_frame)
+        self.tree_frame.grid(row=2, column=0, sticky="nsew", padx=20, pady=(0, 20))
+        self.tree_frame.grid_columnconfigure(0, weight=1)
+        self.tree_frame.grid_rowconfigure(0, weight=1)
+        
+        # Create treeview with scrollbars
+        self.tree = ttk.Treeview(self.tree_frame, columns=("value",), show="tree headings")
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        
+        # Configure columns
+        self.tree.heading("#0", text=get_ui_text('attribute', self.current_language))
+        self.tree.heading("value", text=get_ui_text('value', self.current_language))
+        self.tree.column("#0", width=300, minwidth=200)
+        self.tree.column("value", width=400, minwidth=200)
+        
+        # Add scrollbars
+        v_scrollbar = ttk.Scrollbar(self.tree_frame, orient="vertical", command=self.tree.yview)
+        v_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.tree.configure(yscrollcommand=v_scrollbar.set)
+        
+        h_scrollbar = ttk.Scrollbar(self.tree_frame, orient="horizontal", command=self.tree.xview)
+        h_scrollbar.grid(row=1, column=0, sticky="ew")
+        self.tree.configure(xscrollcommand=h_scrollbar.set)
+        
+        # Configure treeview style
+        style = ttk.Style()
+        style.configure("Treeview", font=("Segoe UI", 10))
+        style.configure("Treeview.Heading", font=("Segoe UI", 11, "bold"))
+    
+    def change_language(self, language_name):
+        """Change the application language"""
+        if language_name == "中文":
+            self.current_language = 'zh'
+        else:
+            self.current_language = 'en'
+        
+        # Update UI elements
+        self.update_ui_language()
+        
+        # Refresh media info display if available
+        if self.media_info:
+            self.display_media_info()
+    
+    def update_ui_language(self):
+        """Update all UI elements with current language"""
+        self.root.title(get_ui_text('title', self.current_language))
+        self.open_button.configure(text=get_ui_text('open_file', self.current_language))
+        self.export_button.configure(text=get_ui_text('export_info', self.current_language))
+        self.sidebar_label.configure(text=get_ui_text('tracks', self.current_language))
+        self.content_title.configure(text=get_ui_text('media_information', self.current_language))
+        self.language_label.configure(text=get_ui_text('language', self.current_language) + ":")
+        self.search_entry.configure(placeholder_text=get_ui_text('search_placeholder', self.current_language))
+        self.status_label.configure(text=get_ui_text('ready', self.current_language))
+        
+        # Update treeview headers
+        if hasattr(self, 'tree'):
+            self.tree.heading("#0", text=get_ui_text('attribute', self.current_language))
+            self.tree.heading("value", text=get_ui_text('value', self.current_language))
+    
+    def on_search_change(self, *args):
+        """Handle search text changes"""
+        if hasattr(self, 'current_track_data'):
+            self.filter_tree_items()
+    
+    def filter_tree_items(self):
+        """Filter tree items based on search text"""
+        search_text = self.search_var.get().lower()
+        if not search_text:
+            # Show all items
+            for item in self.tree.get_children():
+                self.show_tree_item(item, True)
+        else:
+            # Filter items
+            for item in self.tree.get_children():
+                self.filter_tree_item(item, search_text)
+    
+    def filter_tree_item(self, item, search_text):
+        """Recursively filter tree items"""
+        item_text = self.tree.item(item, "text").lower()
+        item_value = self.tree.item(item, "values")
+        item_value_text = item_value[0].lower() if item_value else ""
+        
+        # Check if item matches search
+        matches = search_text in item_text or search_text in item_value_text
+        
+        # Check children
+        children = self.tree.get_children(item)
+        child_matches = False
+        for child in children:
+            if self.filter_tree_item(child, search_text):
+                child_matches = True
+        
+        # Show item if it matches or has matching children
+        show_item = matches or child_matches
+        self.show_tree_item(item, show_item)
+        
+        if show_item and child_matches:
+            self.tree.item(item, open=True)
+        
     def show_welcome_message(self):
-        welcome_text = """
-🎬 Welcome to MediaInfo Viewer
-
-This modern and intuitive application displays comprehensive media file information.
-
-Features:
-• 🎯 Fast and responsive interface
-• 📊 Detailed track information
-• 🎨 Modern dark/light theme support
-• 💾 Export capabilities
-• 🖱️ Right-click integration
-
-To get started:
-1. Click "Open Media File" or drag & drop a file
-2. Select tracks from the sidebar to view details
-3. Export information if needed
-
-Supported formats: Video, Audio, Image, and more!
-        """
-        self.info_textbox.delete("1.0", tk.END)
-        self.info_textbox.insert("1.0", welcome_text)
-        self.info_textbox.configure(state="disabled")
+        """Show welcome message in the treeview"""
+        # Clear the tree
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        
+        # Add welcome items
+        welcome_node = self.tree.insert("", "end", text=get_ui_text('welcome_title', self.current_language), values=("",), open=True)
+        
+        features = [
+            "🎯 快速响应界面" if self.current_language == 'zh' else "🎯 Fast and responsive interface",
+            "📊 详细轨道信息" if self.current_language == 'zh' else "📊 Detailed track information", 
+            "🎨 现代深色/浅色主题" if self.current_language == 'zh' else "🎨 Modern dark/light theme support",
+            "💾 导出功能" if self.current_language == 'zh' else "💾 Export capabilities",
+            "🔍 搜索功能" if self.current_language == 'zh' else "🔍 Search functionality",
+            "🌍 中英文支持" if self.current_language == 'zh' else "🌍 Chinese/English support"
+        ]
+        
+        features_node = self.tree.insert(welcome_node, "end", text=get_ui_text('welcome_features', self.current_language), values=("",), open=True)
+        for feature in features:
+            self.tree.insert(features_node, "end", text=feature, values=("",))
+        
+        # Getting started instructions
+        instructions = [
+            "1. " + ("点击'打开媒体文件'按钮" if self.current_language == 'zh' else "Click 'Open Media File' button"),
+            "2. " + ("从侧边栏选择轨道查看详情" if self.current_language == 'zh' else "Select tracks from sidebar to view details"),
+            "3. " + ("使用搜索功能快速查找信息" if self.current_language == 'zh' else "Use search to quickly find information"),
+            "4. " + ("如需要可导出信息" if self.current_language == 'zh' else "Export information if needed")
+        ]
+        
+        start_node = self.tree.insert(welcome_node, "end", text=get_ui_text('welcome_to_start', self.current_language), values=("",), open=True)
+        for instruction in instructions:
+            self.tree.insert(start_node, "end", text=instruction, values=("",))
+        
+        formats_node = self.tree.insert(welcome_node, "end", text=get_ui_text('supported_formats', self.current_language), values=("",))
+    
+    def load_file(self, file_path):
+        # Update status
+        self.update_status(get_ui_text('loading', self.current_language))
+        self.file_path_label.configure(text=os.path.basename(file_path))
+        
+        # Load media info in separate thread to keep UI responsive
+        def load_thread():
+            try:
+                self.media_info = MediaInfo.parse(file_path)
+                self.root.after(0, self.display_media_info)
+                self.root.after(0, lambda: self.update_status(get_ui_text('file_loaded', self.current_language)))
+                self.root.after(0, lambda: self.export_button.configure(state="normal"))
+            except Exception as e:
+                self.root.after(0, lambda: self.show_error(f"Error loading file: {str(e)}"))
+                self.root.after(0, lambda: self.update_status(get_ui_text('error_loading', self.current_language)))
+        
+        threading.Thread(target=load_thread, daemon=True).start()
+    
+    def show_tree_item(self, item, show):
+        """Show or hide a tree item"""
+        if show:
+            self.tree.reattach(item, self.tree.parent(item), self.tree.index(item))
+        else:
+            self.tree.detach(item)
     
     def open_file(self):
         file_types = [
@@ -194,8 +365,6 @@ Supported formats: Video, Audio, Image, and more!
                 self.root.after(0, lambda: self.show_error(f"Error loading file: {str(e)}"))
                 self.root.after(0, lambda: self.update_status("Error loading file"))
         
-        threading.Thread(target=load_thread, daemon=True).start()
-    
     def display_media_info(self):
         # Clear previous track buttons
         for widget in self.track_frame.winfo_children():
@@ -208,6 +377,17 @@ Supported formats: Video, Audio, Image, and more!
         self.track_buttons = []
         for i, track in enumerate(self.media_info.tracks):
             track_type = track.track_type or "Unknown"
+            if self.current_language == 'zh':
+                type_map = {
+                    'General': '常规',
+                    'Video': '视频', 
+                    'Audio': '音频',
+                    'Text': '文本',
+                    'Image': '图像',
+                    'Menu': '菜单'
+                }
+                track_type = type_map.get(track_type, track_type)
+            
             track_name = f"{track_type}"
             
             if track.track_id:
@@ -235,22 +415,117 @@ Supported formats: Video, Audio, Image, and more!
             return
         
         track = self.media_info.tracks[track_index]
+        self.current_track_data = track
         
-        # Format track information nicely
-        info_text = self.format_track_info(track)
+        # Clear the tree
+        for item in self.tree.get_children():
+            self.tree.delete(item)
         
-        # Update content
-        self.info_textbox.configure(state="normal")
-        self.info_textbox.delete("1.0", tk.END)
-        self.info_textbox.insert("1.0", info_text)
-        self.info_textbox.configure(state="disabled")
+        # Populate tree with track information
+        self.populate_track_tree(track)
         
         # Update title
         track_type = track.track_type or "Unknown"
-        self.content_title.configure(text=f"📄 {track_type} Track Information")
+        if self.current_language == 'zh':
+            type_map = {
+                'General': '常规',
+                'Video': '视频',
+                'Audio': '音频', 
+                'Text': '文本',
+                'Image': '图像',
+                'Menu': '菜单'
+            }
+            track_type = type_map.get(track_type, track_type)
+        
+        title_text = f"📄 {track_type} " + ("轨道信息" if self.current_language == 'zh' else "Track Information")
+        self.content_title.configure(text=title_text)
     
-    def format_track_info(self, track):
-        """Format track information in a beautiful and organized way"""
+    def populate_track_tree(self, track):
+        """Populate the tree with track information in a structured way"""
+        track_type = track.track_type or "Unknown"
+        
+        # Organize attributes by category
+        categories = {
+            "Basic Information": [
+                "format", "format_profile", "codec_id", "duration", "file_size",
+                "overall_bit_rate", "track_id", "stream_identifier"
+            ],
+            "Video Properties": [
+                "width", "height", "display_aspect_ratio", "frame_rate", "bit_rate",
+                "bit_depth", "chroma_subsampling", "color_space", "scan_type", "pixel_aspect_ratio"
+            ],
+            "Audio Properties": [
+                "channel_s", "sampling_rate", "bit_rate", "compression_mode",
+                "channel_layout", "bit_depth", "channel_positions"
+            ],
+            "Technical Details": [
+                "writing_library", "encoded_date", "tagged_date", "color_primaries",
+                "transfer_characteristics", "matrix_coefficients", "commercial_name", "internet_media_type"
+            ],
+            "Metadata": [
+                "title", "performer", "album", "track_name", "artist", "genre",
+                "recorded_date", "copyright", "comment"
+            ]
+        }
+        
+        # Display relevant categories based on track type
+        relevant_categories = ["Basic Information"]
+        if track_type.lower() == "video":
+            relevant_categories.extend(["Video Properties", "Technical Details"])
+        elif track_type.lower() == "audio":
+            relevant_categories.extend(["Audio Properties", "Metadata"])
+        else:
+            relevant_categories.extend(["Technical Details", "Metadata"])
+        
+        # Add categories as tree nodes
+        for category in relevant_categories:
+            category_items = []
+            for attr in categories[category]:
+                value = getattr(track, attr, None)
+                if value is not None and str(value).strip():
+                    category_items.append((attr, value))
+            
+            if category_items:
+                # Translate category name
+                category_name = get_category_name(category, self.current_language)
+                category_node = self.tree.insert("", "end", text=f"📋 {category_name}", values=("",), open=True)
+                
+                for attr, value in category_items:
+                    # Format the attribute name and value
+                    display_name = get_attribute_name(attr, self.current_language)
+                    formatted_value = self.format_value(attr, value)
+                    self.tree.insert(category_node, "end", text=display_name, values=(formatted_value,))
+        
+        # Add other properties not in categories
+        other_attrs = []
+        for attr_name in dir(track):
+            if (not attr_name.startswith('_') and 
+                not callable(getattr(track, attr_name)) and
+                attr_name not in [item for sublist in categories.values() for item in sublist]):
+                
+                value = getattr(track, attr_name)
+                if value is not None and str(value).strip():
+                    other_attrs.append((attr_name, value))
+        
+        if other_attrs:
+            other_category = get_category_name("Other Properties", self.current_language)
+            other_node = self.tree.insert("", "end", text=f"📋 {other_category}", values=("",), open=False)
+            
+            for attr_name, value in other_attrs:
+                display_name = get_attribute_name(attr_name, self.current_language)
+                formatted_value = self.format_value(attr_name, value)
+    def export_text(self, file_path):
+        with open(file_path, 'w', encoding='utf-8') as f:
+            title = "媒体信息报告" if self.current_language == 'zh' else "MEDIA INFORMATION REPORT"
+            f.write(f"{title}\n")
+            f.write("=" * 60 + "\n\n")
+            
+            for i, track in enumerate(self.media_info.tracks):
+                f.write(self.format_track_info_for_export(track))
+                f.write("\n\n" + "=" * 60 + "\n\n")
+    
+    def format_track_info_for_export(self, track):
+        """Format track information for export (legacy text format)"""
         info_lines = []
         track_type = track.track_type or "Unknown"
         
@@ -292,26 +567,26 @@ Supported formats: Video, Audio, Image, and more!
             relevant_categories.extend(["Audio Properties", "Metadata"])
         else:
             relevant_categories.extend(["Technical Details", "Metadata"])
-        
+        # Add categories as tree nodes
         for category in relevant_categories:
-            category_data = []
+            category_items = []
             for attr in categories[category]:
                 value = getattr(track, attr, None)
-                if value is not None:
-                    # Format the attribute name nicely
-                    display_name = attr.replace("_", " ").title()
-                    
-                    # Format specific values
-                    formatted_value = self.format_value(attr, value)
-                    category_data.append(f"  {display_name:<25}: {formatted_value}")
+                if value is not None and str(value).strip():
+                    category_items.append((attr, value))
             
-            if category_data:
-                info_lines.append(f"📋 {category}")
-                info_lines.append("-" * 40)
-                info_lines.extend(category_data)
-                info_lines.append("")
+            if category_items:
+                # Translate category name
+                category_name = get_category_name(category, self.current_language)
+                category_node = self.tree.insert("", "end", text=f"📋 {category_name}", values=("",), open=True)
+                
+                for attr, value in category_items:
+                    # Format the attribute name and value
+                    display_name = get_attribute_name(attr, self.current_language)
+                    formatted_value = self.format_value(attr, value)
+                    self.tree.insert(category_node, "end", text=display_name, values=(formatted_value,))
         
-        # Additional attributes not in categories
+        # Add other properties not in categories
         other_attrs = []
         for attr_name in dir(track):
             if (not attr_name.startswith('_') and 
@@ -320,16 +595,23 @@ Supported formats: Video, Audio, Image, and more!
                 
                 value = getattr(track, attr_name)
                 if value is not None and str(value).strip():
-                    display_name = attr_name.replace("_", " ").title()
-                    formatted_value = self.format_value(attr_name, value)
-                    other_attrs.append(f"  {display_name:<25}: {formatted_value}")
+                    other_attrs.append((attr_name, value))
         
         if other_attrs:
-            info_lines.append("📋 Other Properties")
-            info_lines.append("-" * 40)
-            info_lines.extend(other_attrs)
-        
-        return "\n".join(info_lines)
+            other_category = get_category_name("Other Properties", self.current_language)
+            other_node = self.tree.insert("", "end", text=f"📋 {other_category}", values=("",), open=False)
+            
+            for attr_name, value in other_attrs:
+                display_name = get_attribute_name(attr_name, self.current_language)
+                formatted_value = self.format_value(attr_name, value)
+                self.tree.insert(other_node, "end", text=display_name, values=(formatted_value,))
+    
+    def show_error(self, message):
+        messagebox.showerror("Error", message)
+        # Clear the tree and show error
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        error_node = self.tree.insert("", "end", text="❌ Error", values=(message,))
     
     def format_value(self, attr_name, value):
         """Format values for better display"""
